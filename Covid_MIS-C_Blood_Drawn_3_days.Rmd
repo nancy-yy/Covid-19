@@ -1,0 +1,636 @@
+---
+title: "Covid-19-Group2"
+author: "Nanxi Guo"
+date: "2/9/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DESeq2 analysis of COVID-19 study 
+# Run2 46 samples only
+# but only use samples with hospitalization dates less than 3
+# 2/9/2021
+# Nanxi Guo
+
+# N For Run 2 Samples’ Blood drawn ≤ 3 days of hospitalization
+# Mild/Moderate MIS-C: 5
+# Severe MIS-C: 10 (if removing PTCOV77)
+# Mild/Moderate COVID: 5
+# Severe COVID: 3 (if removing PTCOV40)
+# HC: 8
+# Total N: 31
+
+
+```{r}
+library("DESeq2")
+library("readxl")
+library("ggplot2")
+run2.46.samples <- read_excel("/Users/nanxi/Desktop/Covid-project/Origin_file/run2 46 samples.xlsx")
+run2.metadata <- read.csv("/Users/nanxi/Desktop/Covid-project/Origin_file/run2.new.csv", header=TRUE,sep=",")
+run2.countdata <- as.matrix(run2.46.samples[2:47])
+dim(run2.countdata)
+# 28277 46
+```
+
+## remove outliers: PTCOV40, PTCOV77
+```{r}
+which(colnames(run2.countdata)=="PTCOV40") # 28th column
+which(colnames(run2.countdata)=="PTCOV77") # 45th column
+run2.countdata.no.outliers = run2.countdata[,-c(28, 45)]
+dim(run2.countdata.no.outliers) 
+# 28277 44
+
+library(dplyr)
+run2.metadata.no.outliers = run2.metadata %>% filter(id != "PTCOV40",id != "PTCOV77")
+dim(run2.metadata.no.outliers)
+# 44 7
+
+```
+## PCA plot
+```{r}
+run2.order.countdata <- cbind(run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4)],run2.countdata.no.outliers[,run2.metadata.no.outliers$status=="H"], run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4)])
+
+run2.order.coldata <-  rbind(run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4),],run2.metadata.no.outliers[run2.metadata.no.outliers$status=="H",], run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4),])
+
+rownames(run2.order.countdata) = run2.46.samples$geneName
+
+dds <- DESeqDataSetFromMatrix(countData = run2.order.countdata, colData = run2.order.coldata, design=~status)
+vsd <- vst(dds, blind=FALSE)
+plotPCA(vsd,intgroup=c("status"))## PCA plot Run2
+
+pcaData <- plotPCA(vsd, intgroup=c("status"), returnData=TRUE)
+percentVar <- round(100 * attr(pcaData, "percentVar"))
+ggplot(pcaData, aes(PC1, PC2, color=group)) +
+  geom_point(size=3) +
+  xlab(paste0("PC1: ",percentVar[1],"% variance")) +
+  ylab(paste0("PC2: ",percentVar[2],"% variance")) +
+  #geom_text(label=colnames(assay(vsd)),nudge_x=2,nudge_y=2,size=1.8)+
+  coord_fixed()
+
+
+```
+
+# Group 2 - 31 For Run 2 Samples’ Blood drawn ≤ 3 days of hospitalization
+## Test 1 - MIS-C vs Healthy Control (23 samples)
+```{r}
+test1countdata <- cbind(run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4)],run2.countdata.no.outliers[,run2.metadata.no.outliers$status=="H"])
+test1coldata <-  rbind(run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4),],run2.metadata.no.outliers[run2.metadata.no.outliers$status=="H",])
+test1coldata <- test1coldata[,-c(6,7)]
+test1coldata[,3]=as.factor(test1coldata[,3])
+test1coldata[,4]=as.factor(test1coldata[,4])
+test1coldata[,5]=as.factor(test1coldata[,5])
+dim(test1countdata) # 23 samples
+dim(test1coldata)
+rownames(test1countdata) = run2.46.samples$geneName
+test1coldata$status <- droplevels(test1coldata$status)
+dds <- DESeqDataSetFromMatrix(countData = test1countdata, colData = test1coldata, design=~status)
+Group2.res01 <- results(DESeq(dds),contrast=c("status", "M", "H"))
+summary(Group2.res01)
+nn <- sum(!is.na(Group2.res01$log2FoldChange))
+# head(Group2.res02,5)
+Group2.res01 <- Group2.res01[order(Group2.res01$log2FoldChange,decreasing=T),]
+# head(Group2.res02,5)
+write.csv(as.data.frame(head(Group2.res01,nn)),file="Group2.res01.MIS-C vs Healthy Control.by.log2FoldChange.csv")
+
+Group2.res01 <- Group2.res01[order(Group2.res01$padj,decreasing=F),]
+# head(Group2.res02,5)
+write.csv(as.data.frame(head(Group2.res01,nn)),file="Group2.res01.MIS-C vs Healthy Control.by.padj.csv")
+
+#volcano plot
+Group2.res01.plot <- as.data.frame(head(Group2.res01,nn))
+#jpeg(file="Volcano plot_MIS-C vs Healthy Control.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res01.plot$log2FoldChange, -log10(Group2.res01.plot$pvalue))
+plot(Group2.res01.plot$log2FoldChange, -log10(Group2.res01.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="MIS-C vs Healthy Control", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res01.plot$log2FoldChange) > 2 & Group2.res01.plot$pvalue < alpha 
+text(Group2.res01.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res01.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res01.plot))[gn.selected], cex=0.5)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)). 
+
+
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+
+an1<-data.frame(Group2.res01)
+nam <- rownames(an1)
+EnhancedVolcano(an1,lab = nam,ylim = c(0,20),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="MIS-C vs Healthy Control", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 2 - COVID-19 vs Healthy Control (16 samples)
+```{r}
+test2countdata <- cbind(run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4)],run2.countdata.no.outliers[,run2.metadata.no.outliers$status=="H"])
+test2coldata <-  rbind(run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4),],run2.metadata.no.outliers[run2.metadata.no.outliers$status=="H",])
+test2coldata <- test2coldata[,-c(6,7)]
+test2coldata[,3]=as.factor(test2coldata[,3])
+test2coldata[,4]=as.factor(test2coldata[,4])
+test2coldata[,5]=as.factor(test2coldata[,5])
+dim(test2countdata) # 16 samples
+dim(test2coldata)
+rownames(test2countdata) = run2.46.samples$geneName
+test2coldata$status <- droplevels(test2coldata$status)
+dds <- DESeqDataSetFromMatrix(countData = test2countdata, colData = test2coldata, design=~status)
+Group2.res02 <- results(DESeq(dds),contrast=c("status", "C", "H"))
+summary(Group2.res02)
+nn <- sum(!is.na(Group2.res02$log2FoldChange))
+# head(Group2.res02,5)
+Group2.res02 <- Group2.res02[order(Group2.res02$log2FoldChange,decreasing=T),]
+# head(Group2.res02,5)
+write.csv(as.data.frame(head(Group2.res02,nn)),file="Group2.res02.COVID-19 vs Healthy Control.by.log2FoldChange.csv")
+
+Group2.res02 <- Group2.res02[order(Group2.res02$padj,decreasing=F),]
+write.csv(as.data.frame(head(Group2.res02,nn)),file="Group2.res02.COVID-19 vs Healthy Control.by.padj.csv")
+
+
+#volcano plot
+Group2.res02.plot <- as.data.frame(head(Group2.res02,nn))
+#png(file="Volcano plot_COVID-19 vs Healthy Control.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res02.plot$log2FoldChange, -log10(Group2.res02.plot$pvalue))
+plot(Group2.res02.plot$log2FoldChange, -log10(Group2.res02.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="COVID-19 vs Healthy Control", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res02.plot$log2FoldChange) > 2 & Group2.res02.plot$pvalue < alpha 
+text(Group2.res02.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res02.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res02.plot))[gn.selected], cex=0.6)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)). 
+
+ana<-data.frame(Group2.res02)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,20),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="COVID-19 vs Healthy Control", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 3 - COVID-19 vs MIS-C
+```{r}
+test3countdata <- cbind(run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4)],run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4)])
+test3coldata <-  rbind(run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4),],run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4),])
+test3coldata <- test3coldata[,-c(6,7)]
+test3coldata[,3]=as.factor(test3coldata[,3])
+test3coldata[,4]=as.factor(test3coldata[,4])
+test3coldata[,5]=as.factor(test3coldata[,5])
+dim(test3countdata) # 23 samples
+dim(test3coldata)
+rownames(test3countdata) = run2.46.samples$geneName
+test3coldata$status <- droplevels(test3coldata$status)
+dds <- DESeqDataSetFromMatrix(countData = test3countdata, colData = test3coldata, design=~status)
+Group2.res03 <- results(DESeq(dds),contrast=c("status", "C", "M"))
+summary(Group2.res03)
+nn <- sum(!is.na(Group2.res03$log2FoldChange))
+# head(Group2.res03,5)
+Group2.res03 <- Group2.res03[order(Group2.res03$log2FoldChange,decreasing=T),]
+# head(Group2.res03,5)
+write.csv(as.data.frame(head(Group2.res03,nn)),file="Group2.res03.COVID-19 vs MIS-C.by.log2FoldChange.csv")
+#sort by padj
+Group2.res03 <- Group2.res03[order(Group2.res03$padj,decreasing=F),]
+# head(Group2.res03,5)
+write.csv(as.data.frame(head(Group2.res03,nn)),file="Group2.res03.COVID-19 vs MIS-C.by.padj.csv")
+
+#volcano plot
+Group2.res03.plot <- as.data.frame(head(Group2.res03,nn))
+#png(file="Volcano plot_COVID-19 vs MIS-C.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res03.plot$log2FoldChange, -log10(Group2.res03.plot$pvalue))
+plot(Group2.res03.plot$log2FoldChange, -log10(Group2.res03.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="COVID-19 vs MIS-C", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res03.plot$log2FoldChange) > 2 & Group2.res03.plot$pvalue < alpha 
+text(Group2.res03.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res03.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res03.plot))[gn.selected], cex=0.5)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)). 
+
+ana<-data.frame(Group2.res03)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,12),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="COVID-19 vs MIS-C", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 4 - MIS-C (Severe) vs MIS-C (Mild) (15 samples)
+```{r}
+test4countdata <- run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4)]
+test4coldata <-  run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="M")&(run2.metadata.no.outliers$blood<4),]
+test4coldata <- test4coldata[,-c(6,7)]
+test4coldata[,3]=as.factor(test4coldata[,3])
+test4coldata[,4]=as.factor(test4coldata[,4])
+test4coldata[,5]=as.factor(test4coldata[,5])
+dim(test4countdata) # 15 samples
+dim(test4coldata)
+rownames(test4countdata) = run2.46.samples$geneName
+test4coldata$status <- droplevels(test4coldata$status)
+test4coldata$level <- droplevels(test4coldata$level)
+dds <- DESeqDataSetFromMatrix(countData = test4countdata, colData = test4coldata, design=~level)
+Group2.res04 <- results(DESeq(dds),contrast=c("level", "S", "M"))
+summary(Group2.res04)
+nn <- sum(!is.na(Group2.res04$log2FoldChange))
+# head(Group2.res04,5)
+Group2.res04 <- Group2.res04[order(Group2.res04$log2FoldChange,decreasing=T),]
+# head(Group2.res04,5)
+write.csv(as.data.frame(head(Group2.res04,nn)),file="Group2.res04.Severe MIS-C vs Mild MIS-C.by.log2FoldChange.csv")
+#sort by padj
+Group2.res04 <- Group2.res04[order(Group2.res04$padj,decreasing=F),]
+# head(Group2.res04,5)
+write.csv(as.data.frame(head(Group2.res04,nn)),file="Group2.res04.Severe MIS-C vs Mild MIS-C.by.padj.csv")
+
+#volcano plot
+Group2.res04.plot <- as.data.frame(head(Group2.res04,nn))
+#png(file="Volcano plot_Severe MIS-C vs Mild MIS-C.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res04.plot$log2FoldChange, -log10(Group2.res04.plot$pvalue))
+plot(Group2.res04.plot$log2FoldChange, -log10(Group2.res04.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="Severe MIS-C vs Mild MIS-C", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res04.plot$log2FoldChange) > 2 & Group2.res04.plot$pvalue < alpha 
+text(Group2.res04.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res04.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res04.plot))[gn.selected], cex=0.6)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)).
+
+ana<-data.frame(Group2.res04)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,10),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="Severe MIS-C vs Mild MIS-C", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 5 - COVID-19 (Severe) vs COVID-19 (Mild) (8 samples)
+```{r}
+test5countdata <- run2.countdata.no.outliers[,(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4)]
+test5coldata <-  run2.metadata.no.outliers[(run2.metadata.no.outliers$status=="C")&(run2.metadata.no.outliers$blood<4),]
+test5coldata <- test5coldata[,-c(6,7)]
+test5coldata[,3]=as.factor(test5coldata[,3])
+test5coldata[,4]=as.factor(test5coldata[,4])
+test5coldata[,5]=as.factor(test5coldata[,5])
+dim(test5countdata) # 8 samples
+dim(test5coldata)
+rownames(test5countdata) = run2.46.samples$geneName
+test5coldata$status <- droplevels(test5coldata$status)
+test5coldata$level <- droplevels(test5coldata$level)
+dds <- DESeqDataSetFromMatrix(countData = test5countdata, colData = test5coldata, design=~level)
+Group2.res05 <- results(DESeq(dds),contrast=c("level", "S", "M"))
+summary(Group2.res05)
+nn <- sum(!is.na(Group2.res05$log2FoldChange))
+# head(Group2.res05,5)
+Group2.res05 <- Group2.res05[order(Group2.res05$log2FoldChange,decreasing=T),]
+# head(Group2.res05,5)
+write.csv(as.data.frame(head(Group2.res05,nn)),file="Group2.res05.Severe COVID-19 vs Mild COVID-19.by.log2FoldChange.csv")
+#sort by padj
+Group2.res05 <- Group2.res05[order(Group2.res05$padj,decreasing=F),]
+# head(Group2.res05,5)
+write.csv(as.data.frame(head(Group2.res05,nn)),file="Group2.res05.Severe COVID-19 vs Mild COVID-19.by.padj.csv")
+
+#volcano plot
+Group2.res05.plot <- as.data.frame(head(Group2.res05,nn))
+#png(file="Volcano plot_Severe COVID-19 vs Mild COVID-19.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res05.plot$log2FoldChange, -log10(Group2.res05.plot$pvalue))
+plot(Group2.res05.plot$log2FoldChange, -log10(Group2.res05.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="Severe COVID-19 vs Mild COVID-19", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res05.plot$log2FoldChange) > 2 & Group2.res05.plot$pvalue < alpha 
+text(Group2.res05.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res05.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res05.plot))[gn.selected], cex=0.6)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)).
+ana<-data.frame(Group2.res05)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,9),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="Severe COVID vs Mild COVID-19", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 6 - COVID-19 (Severe) vs MIS-C (Severe) (13 samples)
+```{r}
+test6countdata <- run2.countdata.no.outliers[,(run2.metadata.no.outliers$level=="S")&(run2.metadata.no.outliers$blood<4)]
+test6coldata <-  run2.metadata.no.outliers[(run2.metadata.no.outliers$level=="S")&(run2.metadata.no.outliers$blood<4),]
+test6coldata <- test6coldata[,-c(6,7)]
+test6coldata[,3]=as.factor(test6coldata[,3])
+test6coldata[,4]=as.factor(test6coldata[,4])
+test6coldata[,5]=as.factor(test6coldata[,5])
+dim(test6countdata) # 13 samples
+dim(test6coldata)
+rownames(test6countdata) = run2.46.samples$geneName
+test6coldata$status <- droplevels(test6coldata$status)
+test6coldata$level <- droplevels(test6coldata$level)
+dds <- DESeqDataSetFromMatrix(countData = test6countdata, colData = test6coldata, design=~status)
+Group2.res06 <- results(DESeq(dds),contrast=c("status", "C", "M"))
+summary(Group2.res06)
+nn <- sum(!is.na(Group2.res06$log2FoldChange))
+# head(Group2.res06,5)
+Group2.res06 <- Group2.res06[order(Group2.res06$log2FoldChange,decreasing=T),]
+# head(Group2.res06,5)
+write.csv(as.data.frame(head(Group2.res06,nn)),file="Group2.res06.Severe COVID-19 vs Severe MIS-C.by.log2FoldChange.csv")
+#sort by padj
+Group2.res06 <- Group2.res06[order(Group2.res06$padj,decreasing=F),]
+# head(Group2.res06,5)
+write.csv(as.data.frame(head(Group2.res06,nn)),file="Group2.res06.Severe COVID-19 vs Severe MIS-C.by.padj.csv")
+
+#volcano plot
+Group2.res06.plot <- as.data.frame(head(Group2.res06,nn))
+#png(file="Volcano plot_Severe COVID-19 vs Severe MIS-C.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res06.plot$log2FoldChange, -log10(Group2.res06.plot$pvalue))
+plot(Group2.res06.plot$log2FoldChange, -log10(Group2.res06.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="Severe COVID-19 vs Severe MIS-C", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res06.plot$log2FoldChange) > 2 & Group2.res06.plot$pvalue < alpha 
+text(Group2.res06.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res06.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res06.plot))[gn.selected], cex=0.6)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)).
+
+ana<-data.frame(Group2.res06)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,6.3),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="Severe COVID-19 vs Severe MIS-C", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+
+## Test 7 COVID-19 (Mild) vs MIS-C (Mild)
+```{r}
+test7countdata <- run2.countdata.no.outliers[,(run2.metadata.no.outliers$level=="M")&(run2.metadata.no.outliers$blood<4)]
+test7coldata <-  run2.metadata.no.outliers[(run2.metadata.no.outliers$level=="M")&(run2.metadata.no.outliers$blood<4),]
+test7coldata <- test7coldata[,-c(6,7)]
+test7coldata[,3]=as.factor(test7coldata[,3])
+test7coldata[,4]=as.factor(test7coldata[,4])
+test7coldata[,5]=as.factor(test7coldata[,5])
+dim(test7countdata) # 10 samples
+dim(test7coldata)
+rownames(test7countdata) = run2.46.samples$geneName
+test7coldata$status <- droplevels(test7coldata$status)
+test7coldata$level <- droplevels(test7coldata$level)
+dds <- DESeqDataSetFromMatrix(countData = test7countdata, colData = test7coldata, design=~status)
+Group2.res07 <- results(DESeq(dds),contrast=c("status", "C", "M"))
+summary(Group2.res07)
+nn <- sum(!is.na(Group2.res07$log2FoldChange))
+# head(Group2.res07,5)
+Group2.res07 <- Group2.res07[order(Group2.res07$log2FoldChange,decreasing=T),]
+# head(Group2.res07,5)
+write.csv(as.data.frame(head(Group2.res07,nn)),file="Group2.res07.Mild COVID-19 vs Mild MIS-C.by.log2FoldChange.csv")
+#sort by padj
+Group2.res07 <- Group2.res07[order(Group2.res07$padj,decreasing=F),]
+# head(Group2.res07,5)
+write.csv(as.data.frame(head(Group2.res07,nn)),file="Group2.res07.Severe COVID-19 vs Severe MIS-C.by.padj.csv")
+
+#volcano plot
+Group2.res07.plot <- as.data.frame(head(Group2.res07,nn))
+#png(file="Volcano plot_Mild COVID-19 vs Mild MIS-C.png")
+alpha <- 0.00001 # Threshold on the adjusted p-value
+cols <- densCols(Group2.res07.plot$log2FoldChange, -log10(Group2.res07.plot$pvalue))
+plot(Group2.res07.plot$log2FoldChange, -log10(Group2.res07.plot$pvalue), col=cols, panel.first=grid(),
+     main="Volcano plot", sub="Mild COVID-19 vs Mild MIS-C", xlab="Effect size: log2(fold-change)", ylab="-log10(p-value)",
+     pch=20, cex=0.6)
+abline(v=0)
+abline(v=c(-1,1), col="brown")
+abline(h=-log10(alpha), col="brown")
+
+gn.selected <- abs(Group2.res07.plot$log2FoldChange) > 2 & Group2.res07.plot$pvalue < alpha 
+text(Group2.res07.plot$log2FoldChange[gn.selected],
+     -log10(Group2.res07.plot$pvalue)[gn.selected],
+     lab=(rownames(Group2.res07.plot))[gn.selected], cex=0.6)
+#dev.off()
+# Volcano plot of DESeq2 results. Abcsissa: log2(fold-change). Ordinate: significance (−log10(P−value)).
+ana<-data.frame(Group2.res07)
+nam <- rownames(ana)
+EnhancedVolcano(ana,lab = nam,ylim = c(0,10),pCutoff = 0.01,pointSize = 2,FCcutoff = 1.0,x = 'log2FoldChange',
+                y = 'pvalue', title="Mild COVID-19 vs Mild MIS-C", labSize = 3, widthConnectors = 0.2,colConnectors = 'grey30')
+```
+## GSEA
+
+```{r}
+BiocManager::install("fgsea")
+BiocManager::install("reactome.db")
+BiocManager::install("qusage")
+library(fgsea)
+library(qusage)
+
+```
+
+```{r}
+cvrt<-read.table("/Users/nanxi/Desktop/Covid-project/Origin_file/KEGG_Files/cvrt.txt",header = F,fill = T)
+kegg<-read.gmt("/Users/nanxi/Desktop/Covid-project/Origin_file/KEGG_Files/c2.cp.kegg.v7.1.symbols.gmt")
+biocarta<-read.gmt("/Users/nanxi/Desktop/Covid-project/Origin_file/KEGG_Files/c2.cp.biocarta.v7.1.symbols.gmt")
+pid<-read.gmt("/Users/nanxi/Desktop/Covid-project/Origin_file/KEGG_Files/c2.cp.pid.v7.1.symbols.gmt")
+reactome<-read.gmt("/Users/nanxi/Desktop/Covid-project/Origin_file/KEGG_Files/c2.cp.reactome.v7.1.symbols.gmt")
+```
+
+
+```{r}
+fc1<- Group2.res01$log2FoldChange
+names(fc1)<-rownames(Group2.res01)
+fc1 <- fc1[!is.na(fc1)]
+fc1<-fc1[!duplicated(fc1)]
+fc1<-fc1[!duplicated(names(fc1))]
+fc1<-fc1[order(fc1,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc1,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc1,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc1,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc1,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"MIS-C vs HC.lfc.kegg.csv")
+write.csv(gsea_biocarta,"MIS-C vs HC.lfc.BioCarta.csv")
+write.csv(gsea_pid,"MIS-C vs HC.lfc.PID.csv")
+write.csv(gsea_reactome,"MIS-C vs HC.lfc.REACTOME.csv")
+
+```
+
+```{r}
+fc2<- Group2.res02$log2FoldChange
+names(fc2)<-rownames(Group2.res02)
+fc2 <- fc2[!is.na(fc2)]
+fc2<-fc2[!duplicated(fc2)]
+fc2<-fc2[!duplicated(names(fc2))]
+fc2<-fc2[order(fc2,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc2,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc2,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc2,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc2,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+write.csv(gsea_kegg1,"COVID-19 vs HC.lfc.kegg.csv")
+write.csv(gsea_biocarta,"COVID-19 vs HC.lfc.BioCarta.csv")
+write.csv(gsea_pid,"COVID-19 vs HC.lfc.PID.csv")
+write.csv(gsea_reactome,"COVID-19 vs HC.lfc.REACTOME.csv")
+
+```
+
+```{r}
+fc3<- Group2.res03$log2FoldChange
+names(fc3)<-rownames(Group2.res03)
+fc3 <- fc3[!is.na(fc3)]
+fc3<-fc3[!duplicated(fc3)]
+fc3<-fc3[!duplicated(names(fc3))]
+fc3<-fc3[order(fc3,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc3,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc3,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc3,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc3,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"MIS-C vs COVID-19.lfc.kegg.csv")
+write.csv(gsea_biocarta,"MIS-C vs COVID-19.lfc.BioCarta.csv")
+write.csv(gsea_pid,"MIS-C vs COVID-19.lfc.PID.csv")
+write.csv(gsea_reactome,"MIS-C vs COVID-19.lfc.REACTOME.csv")
+
+```
+
+```{r}
+fc4<- Group2.res04$log2FoldChange
+names(fc4)<-rownames(Group2.res04)
+fc4 <- fc4[!is.na(fc4)]
+fc4<-fc4[!duplicated(fc4)]
+fc4<-fc4[!duplicated(names(fc4))]
+fc4<-fc4[order(fc4,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc4,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc4,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc4,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc4,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"Severe MIS-C vs Mild MIS-C.lfc.kegg.csv")
+write.csv(gsea_biocarta,"Severe MIS-C vs Mild MIS-C.lfc.BioCarta.csv")
+write.csv(gsea_pid,"Severe MIS-C vs Mild MIS-C.lfc.PID.csv")
+write.csv(gsea_reactome,"Severe MIS-C vs Mild MIS-C.lfc.REACTOME.csv")
+```
+
+```{r}
+fc5<- Group2.res05$log2FoldChange
+names(fc5)<-rownames(Group2.res05)
+fc5 <- fc5[!is.na(fc5)]
+fc5<-fc5[!duplicated(fc5)]
+fc5<-fc5[!duplicated(names(fc5))]
+fc5<-fc5[order(fc5,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc5,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc5,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc5,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc5,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"Severe COVID-19 vs Mild COVID-19.lfc.kegg.csv")
+write.csv(gsea_biocarta,"Severe COVID-19 vs Mild COVID-19.lfc.BioCarta.csv")
+write.csv(gsea_pid,"Severe COVID-19 vs Mild COVID-19.lfc.PID.csv")
+write.csv(gsea_reactome,"Severe COVID-19 vs Mild COVID-19.lfc.REACTOME.csv")
+```
+
+
+```{r}
+fc6 <- Group2.res06$log2FoldChange
+names(fc6)<-rownames(Group2.res06)
+fc6 <- fc6[!is.na(fc6)]
+fc6<-fc6[!duplicated(fc6)]
+fc6<-fc6[!duplicated(names(fc6))]
+fc6<-fc6[order(fc6,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc6,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc6,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc6,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc6,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"Severe MIS-C vs Severe COVID-19.lfc.kegg.csv")
+write.csv(gsea_biocarta,"Severe MIS-C vs Severe COVID-19.lfc.BioCarta.csv")
+write.csv(gsea_pid,"Severe MIS-C vs Severe COVID-19.lfc.PID.csv")
+write.csv(gsea_reactome,"Severe MIS-C vs Severe COVID-19.lfc.REACTOME.csv")
+```
+
+```{r}
+fc7 <- Group2.res07$log2FoldChange
+names(fc7)<-rownames(Group2.res07)
+fc7 <- fc7[!is.na(fc7)]
+fc7<-fc7[!duplicated(fc7)]
+fc7<-fc7[!duplicated(names(fc7))]
+fc7<-fc7[order(fc7,decreasing = T)]
+gsea_kegg1<-fgsea(pathways = kegg,stats = fc7,nperm = 10000)
+gsea_kegg1<-as.data.frame(gsea_kegg1[,c(1:4,7)])
+gsea_kegg1 <- gsea_kegg1[order(gsea_kegg1$padj,decreasing=FALSE),]
+gsea_biocarta<-fgsea(pathways = biocarta,stats = fc7,nperm = 10000)
+gsea_biocarta<-as.data.frame(gsea_biocarta[,c(1:4,7)])
+gsea_biocarta <- gsea_biocarta[order(gsea_biocarta$padj,decreasing=FALSE),]
+gsea_pid<-fgsea(pathways = pid,stats = fc7,nperm = 10000)
+gsea_pid<-as.data.frame(gsea_pid[,c(1:4,7)])
+gsea_pid <- gsea_pid[order(gsea_pid$padj,decreasing=FALSE),]
+gsea_reactome<-fgsea(pathways = reactome,stats = fc7,nperm = 10000)
+gsea_reactome<-as.data.frame(gsea_reactome[,c(1:4,7)])
+gsea_reactome <- gsea_reactome[order(gsea_reactome$padj,decreasing=FALSE),]
+
+write.csv(gsea_kegg1,"Mild MIS-C vs Mild COVID-19.lfc.kegg.csv")
+write.csv(gsea_biocarta,"Mild MIS-C vs Mild COVID-19.lfc.BioCarta.csv")
+write.csv(gsea_pid,"Mild MIS-C vs Mild COVID-19.lfc.PID.csv")
+write.csv(gsea_reactome,"Mild MIS-C vs Mild COVID-19.lfc.REACTOME.csv")
+
+```
